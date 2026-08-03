@@ -1,0 +1,18 @@
+[package]
+name = "wallet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crypto-core = { path = "../crypto-core" }
+bip39.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+hmac.workspace = true
+hex.workspace = true
+k256.workspace = true
+thiserror.workspace = true
+getrandom = "0.2"
+
+[dev-dependencies]
