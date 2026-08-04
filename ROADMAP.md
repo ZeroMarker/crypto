@@ -33,12 +33,14 @@ Recommended crates: `sha2`, `sha3`, `hmac`, `hkdf`, `aes-gcm`, `chacha20poly1305
 Done when: a test signs a message and verifies it round-trip; a mnemonic derives the same address as a reference implementation.
 
 ## Phase 2 — Transaction & wallet layer
-Goal: produce and broadcast real transactions. **Key derivation implemented in
-`crates/wallet`** — see
+Goal: produce and broadcast real transactions. **Key derivation, keystore,
+and Ethereum tx build/sign/parse implemented in `crates/wallet`** — see
 [docs/03-transactions-wallet.md](docs/03-transactions-wallet.md).
 
-- [x] Build/parse transactions: Bitcoin, Ethereum (typed EIP-1559), maybe Solana
-- [x] Sign with Phase 1 keys; canonical serialization (RLP for EVM)
+- [x] Build/parse transactions: legacy EIP-155, typed EIP-2930 + EIP-1559
+      (RLP encoding, `from_raw` decoding)
+- [x] Sign with Phase 1 keys; canonical serialization (RLP for EVM),
+      ecrecover sender recovery
 - [ ] Fee estimation and nonce/sequence management
 - [ ] Node client over JSON-RPC (read state, broadcast tx, wait for receipt)
 - [x] Address derivation from pubkey (checksums, bech32)

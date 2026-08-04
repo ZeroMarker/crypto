@@ -8,7 +8,7 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
 | Phase | Crate | Status |
 |---|---|---|
 | 1 — Primitives | [`crypto-core`](crates/crypto-core) | ✅ implemented |
-| 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented (incl. v3 keystore) |
+| 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented (keystore, tx signing) |
 | 3 — Node/ledger | [`chain`](crates/chain) | ✅ ledger core |
 | 4 — Trading app | — | ⏳ planned |
 | 5 — Hardening | — | ⏳ planned |
@@ -24,6 +24,9 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
 - **Wallet**: BIP-39 mnemonic → seed, BIP-32 HD derivation (full `m/44'/...'`
   paths), Ethereum (EIP-55) + Bitcoin address derivation, Ethereum v3 JSON
   keystore (password-encrypted private keys)
+- **Transactions**: RLP encoding, legacy (EIP-155) + typed (EIP-2930/1559)
+  transaction build/sign/parse, ecrecover sender recovery — pinned against
+  the official EIP-155 vector
 - **Chain**: merkle roots + SPV proofs, compact-bits PoW, block validation,
   longest-chain reorgs, UTXO-backed mempool
 
@@ -39,6 +42,7 @@ cargo run -p crypto-core --example hashes
 cargo run -p crypto-core --example signing
 cargo run -p wallet --example mnemonic_to_address
 cargo run -p wallet --example keystore
+cargo run -p wallet --example sign_transaction
 cargo run -p chain --example demo
 ```
 

@@ -1,7 +1,8 @@
 # Phase 2 — Transactions & wallet
 
-Implemented in `crates/wallet`. Derives keys and addresses from a BIP-39
-mnemonic down to a concrete signing key.
+Implemented in `crates/wallet`: BIP-39/BIP-32 key derivation, address
+formats, the Ethereum v3 keystore, and Ethereum transaction construction,
+signing, and parsing.
 
 ## Derivation chain
 
@@ -111,6 +112,58 @@ Validated against official vectors:
 ```sh
 cargo test -p wallet
 cargo run -p wallet --example mnemonic_to_address
+```
+
+## Transactions (RLP + EIP-155/1559)
+
+`wallet::tx::Transaction` builds, signs, and parses the three transaction
+types in use on Ethereum:
+
+| Type | EIP | Fee model |
+|---|---|---|
+| 0 | 155 | flat `gas_price`, `v = chain_id*2 + 35 + y` |
+| 1 | 2930 | flat `gas_price` + access list |
+| 2 | 1559 | `max_priority_fee` + `max_fee` (base fee burned) |
+
+```rust
+use k256::ecdsa::SigningKey;
+use wallet::tx::{FeeMarket, Transaction};
+
+let sk = SigningKey::from_slice(&[0x46; 32]).unwrap();
+let mut tx = Transaction::new(
+    1,                                                 // mainnet
+    FeeMarket::Eip1559 {
+        max_priority_fee_per_gas: 1_500_000_000,
+        max_fee_per_gas: 30_000_000_000,
+    },
+    0,                                                 // account nonce
+    None,                                              // None = contract creation
+    10_000_000_000_000_000,                            // 0.01 ETH in wei
+    vec![],                                            // calldata
+)?;
+tx.sign(&sk)?;
+let raw = tx.raw()?;       // bytes to broadcast
+let hash = tx.tx_hash()?;  // keccak256(raw)
+let sender = tx.sender_address()?; // ecrecover, no external state
+```
+
+How signing works: the unsigned payload is RLP-encoded (legacy txs get the
+EIP-155 `chain_id, 0, 0` tail; typed txs get a `0x01`/`0x02` type byte),
+Keccak-256 hashed, signed with ECDSA (RFC 6979 deterministic nonce, low-`s`
+per EIP-2), and the recovery parity is appended. Legacy `v` is chain-adjusted
+at encode time with `u128` headroom, so large chain ids (e.g. Arbitrum's
+42161) don't overflow.
+
+Validated against:
+- the **official EIP-155 test vector** — the famous `0xf86c09...` mainnet
+  transaction — byte-for-byte (raw, signing hash, and tx hash
+  `0x33469b22...` all match);
+- independent Python (pycryptodome keccak) computations of the EIP-1559
+  signing hashes, with and without access lists;
+- canonical RLP spec vectors, and ecrecover round-trips for every type.
+
+```sh
+cargo run -p wallet --example sign_transaction
 ```
 
 ## Next
