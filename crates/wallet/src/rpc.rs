@@ -307,10 +307,44 @@ impl Receipt {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeeHistory {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_hex_u64_vec")]
     pub base_fee_per_gas: Vec<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_hex_u64_vec2")]
     pub reward: Vec<Vec<u64>>,
+}
+
+/// Deserialize a JSON array of hex-quantity strings into `Vec<u64>`.
+fn de_hex_u64_vec<'de, D>(d: D) -> Result<Vec<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Vec<String> = Vec::deserialize(d)?;
+    v.iter()
+        .map(|s| {
+            unquantity(s)
+                .map(|v| v as u64)
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
+}
+
+/// Deserialize a JSON 2-D array of hex-quantity strings into `Vec<Vec<u64>>`.
+fn de_hex_u64_vec2<'de, D>(d: D) -> Result<Vec<Vec<u64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Vec<Vec<String>> = Vec::deserialize(d)?;
+    v.iter()
+        .map(|row| {
+            row.iter()
+                .map(|s| {
+                    unquantity(s)
+                        .map(|v| v as u64)
+                        .map_err(serde::de::Error::custom)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Parse a hex quantity (0x-prefixed, big-endian, no leading zeros) to u128.
