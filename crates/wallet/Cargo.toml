@@ -16,6 +16,9 @@ getrandom = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 
+# JSON-RPC node client (blocking HTTP)
+ureq = { version = "3", features = ["json"] }
+
 # Ethereum v3 keystore: AES-128-CTR cipher
 cipher = "0.4"
 aes = "0.8"

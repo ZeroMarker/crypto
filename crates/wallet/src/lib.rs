@@ -28,6 +28,7 @@ use crypto_core::hash::{keccak256, ripemd160, sha256};
 use k256::ecdsa::SigningKey;
 
 pub mod keystore;
+pub mod rpc;
 pub mod tx;
 
 /// Errors produced by wallet operations.
