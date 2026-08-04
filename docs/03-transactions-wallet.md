@@ -56,6 +56,43 @@ let eth = Account::from_path(&m, "m/44'/60'/0'/0/0")?;  // Ethereum
 Both are implemented in `wallet::address_from_public_key` and
 `wallet::bitcoin_address_from_public_key`.
 
+## Keystores (Ethereum v3, Web3 Secret Storage)
+
+`wallet::keystore::Keystore` stores a private key encrypted under a password
+in the exact JSON format geth / MyEtherWallet / MetaMask use on disk
+(`~/.ethereum/keystore/`).
+
+```rust
+use wallet::keystore::Keystore;
+
+let key = [0x7a; 32];
+let ks = Keystore::encrypt(&key, "correct horse battery staple")?;
+let json = ks.to_json()?;                 // write this to disk / backup
+let parsed = Keystore::from_json(&json)?; // read it back
+assert_eq!(parsed.decrypt("correct horse battery staple")?, key);
+```
+
+How the format works:
+
+```text
+ dk = PBKDF2-HMAC-SHA256(password, salt, c=262144, dklen=32)
+ key       = dk[0..16]              (AES-128 key)
+ ciphertext = AES-128-CTR(key, iv, private_key)
+ mac       = keccak256(dk[16..32] ‖ ciphertext)
+```
+
+- The `mac` authenticates the derived key *and* the ciphertext, and is
+  verified in constant time **before** decryption — a wrong password yields
+  no key material. Tampering with any field is rejected.
+- Salt, IV, and the keystore `id` (UUIDv4) are drawn from the OS CSPRNG;
+  `KeystoreOptions` pins them for reproducible golden vectors.
+- The canonical ethereumjs test vector (password `testpassword` → key
+  `7a28b5ba...`) is round-tripped byte-for-byte in the test suite.
+
+```sh
+cargo run -p wallet --example keystore
+```
+
 ## Security notes
 
 - The mnemonic is the master secret. Anyone who holds it controls every derived

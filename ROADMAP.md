@@ -24,7 +24,8 @@ on. **Implemented in `crates/crypto-core`** — see
 - [x] HMAC / HKDF for key derivation
 - [x] Authenticated encryption (AEAD): AES-GCM, ChaCha20-Poly1305
 - [x] Digital signatures: ECDSA (secp256k1), Ed25519
-- [ ] Key management: keystore format (e.g. Ethereum's v3 JSON keystore)
+- [x] Key management: keystore format (Ethereum v3 JSON keystore, Web3
+      Secret Storage)
 - [x] BIP-39 mnemonic → seed → BIP-32 HD wallet derivation
 
 Recommended crates: `sha2`, `sha3`, `hmac`, `hkdf`, `aes-gcm`, `chacha20poly1305`, `k256`, `ed25519-dalek`, `bip39`, `hdwallet`/custom BIP-32.

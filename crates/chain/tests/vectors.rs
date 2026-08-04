@@ -413,3 +413,70 @@ fn mempool_apply_and_rollback_block() {
     assert!(pool.utxo().contains(&op));
     assert!(!pool.utxo().contains(&new_op));
 }
+
+#[test]
+fn mempool_evicts_conflicting_tx_when_block_confirms() {
+    let mut pool = Mempool::new();
+    let op = OutPoint {
+        txid: [5u8; 32],
+        index: 0,
+    };
+    {
+        let utxo = pool.utxo_mut();
+        utxo.credit(op, 100, false);
+    }
+
+    // Our node holds a pending tx spending `op`...
+    let alice = [0xaa; 20];
+    let bob = [0xbb; 20];
+    let t1 = build_payment(&[(op, 100)], alice, 40, alice).unwrap();
+    let t1id = t1.txid();
+    pool.submit(&t1).unwrap();
+    assert_eq!(pool.len(), 1);
+
+    // ...and a block mined elsewhere spends the same outpoint. It is NOT in
+    // our pool, so it slips through the per-tx removal in apply_block.
+    let block_tx = build_payment(&[(op, 100)], bob, 35, bob).unwrap();
+    let block = Block {
+        header: BlockHeader {
+            prev_hash: [0u8; 32],
+            merkle_root: [0u8; 32],
+            timestamp: 1,
+            bits: 0,
+            nonce: 0,
+        },
+        txs: vec![block_tx],
+    };
+    pool.apply_block(&block);
+
+    // t1 conflicts with the confirmed block and must be evicted, releasing
+    // its `spent` marker so the UTXO set stays consistent.
+    assert_eq!(pool.len(), 0);
+    assert!(!pool.contains(&t1id));
+
+    // The block's own output is spendable by a new tx.
+    let new_op = OutPoint {
+        txid: block.txs[0].txid(),
+        index: 0,
+    };
+    let spends_new = build_payment(&[(new_op, 35)], alice, 10, alice).unwrap();
+    pool.submit(&spends_new).unwrap();
+    assert_eq!(pool.len(), 1);
+}
+
+#[test]
+fn header_hash_uses_full_64_bit_nonce() {
+    // Regression: the header hash used to truncate the nonce to 32 bits, so
+    // headers differing only above u32::MAX collided.
+    let base = BlockHeader {
+        prev_hash: [0u8; 32],
+        merkle_root: [1u8; 32],
+        timestamp: 1,
+        bits: 0x207fffff,
+        nonce: 0,
+    };
+    let mut high_nonce = base;
+    high_nonce.nonce = 0x1_0000_0000; // 2^32: low 32 bits equal `base.nonce`
+    assert_ne!(base.hash(), high_nonce.hash());
+    assert_ne!(high_nonce.hash(), [0u8; 32]);
+}

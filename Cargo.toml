@@ -22,6 +22,8 @@ serde_json = "1"
 thiserror = "2"
 anyhow = "1"
 rand = "0.8"
+getrandom = "0.2"
+subtle = "2"
 
 # signing
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
@@ -32,3 +34,19 @@ chacha20poly1305 = "0.10"
 
 # wallet / key derivation
 bip39 = { version = "2", features = ["rand"] }
+
+# Optimize third-party dependencies even in debug builds: keeps our own
+# crates debuggable while hashing/crypto (sha2, aes, ...) runs at release
+# speed. PBKDF2 at 262144 iterations and PoW mining would otherwise make
+# `cargo test` painfully slow.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Workspace members used as dependencies (crypto-core inside wallet's tests,
+# wallet/chain inside each other's) also get the speed-up.
+[profile.dev.package.crypto-core]
+opt-level = 2
+[profile.dev.package.wallet]
+opt-level = 2
+[profile.dev.package.chain]
+opt-level = 2

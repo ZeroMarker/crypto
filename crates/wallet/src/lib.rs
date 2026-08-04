@@ -27,6 +27,8 @@ use bip39::{Language, Mnemonic as Bip39Mnemonic};
 use crypto_core::hash::{keccak256, ripemd160, sha256};
 use k256::ecdsa::SigningKey;
 
+pub mod keystore;
+
 /// Errors produced by wallet operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
@@ -36,6 +38,9 @@ pub enum WalletError {
     /// A derived key was outside the valid secp256k1 range (retry a different index).
     #[error("invalid derived key, try the next index")]
     InvalidKey,
+    /// A BIP-32 derivation path was malformed.
+    #[error("invalid derivation path {path:?}: {reason}")]
+    InvalidPath { path: String, reason: String },
 }
 
 /// A BIP-39 mnemonic phrase (12 words by default) that seeds the wallet.
@@ -144,13 +149,31 @@ impl ExtendedKey {
     /// Derive down a BIP-32 path like `m/44'/0'/0'/0/0`. Hardened levels end
     /// with a `'`. Paths must start with `m`.
     pub fn derive_path(&self, path: &str) -> Result<ExtendedKey, WalletError> {
+        let trimmed = path.trim();
+        if !trimmed.starts_with('m') {
+            return Err(WalletError::InvalidPath {
+                path: path.to_string(),
+                reason: "path must start with 'm'".into(),
+            });
+        }
         let mut current = self.clone();
-        for level in path.trim().split('/').skip(1) {
+        for level in trimmed.split('/').skip(1) {
             let (level, hardened) = match level.strip_suffix('\'') {
                 Some(l) => (l, true),
                 None => (level, false),
             };
-            let index: u32 = level.parse().map_err(|_| WalletError::InvalidKey)?;
+            let index: u32 = level.parse().map_err(|_| WalletError::InvalidPath {
+                path: path.to_string(),
+                reason: format!("'{level}' is not a valid child index"),
+            })?;
+            // Hardened indices use the high bit of the 32-bit index space;
+            // indices >= 2^31 cannot be expressed as a non-hardened child.
+            if !hardened && index >= (1 << 31) {
+                return Err(WalletError::InvalidPath {
+                    path: path.to_string(),
+                    reason: format!("non-hardened index {index} is >= 2^31; use {index}' instead"),
+                });
+            }
             current = current.child(index, hardened)?;
         }
         Ok(current)
@@ -283,7 +306,8 @@ impl Account {
 }
 
 /// Ethereum address from an uncompressed public key: last 20 bytes of
-/// `keccak256(pubkey_without_0x04_prefix)`.
+/// `keccak256(pubkey_without_0x04_prefix)`, formatted with the EIP-55
+/// mixed-case checksum.
 ///
 /// ```
 /// use k256::ecdsa::SigningKey;
@@ -299,7 +323,45 @@ pub fn address_from_public_key(pk: &k256::ecdsa::VerifyingKey) -> String {
     let pubkey = &encoded.as_bytes()[1..];
     let digest = keccak256(pubkey);
     let tail = &digest[12..];
-    format!("0x{}", hex::encode(tail))
+    format!("0x{}", checksum_address(&hex::encode(tail)))
+}
+
+/// EIP-55 mixed-case checksum of a 40-char lowercase hex address (no `0x`).
+///
+/// The 4th nibble of `keccak256(address)` decides the case of each letter:
+/// `>= 8` means uppercase. Digits are never cased, so the checksum is purely
+/// in the letter casing and is ignored by case-insensitive parsers.
+///
+/// ```
+/// // Canonical EIP-55 examples from the spec.
+/// use wallet::checksum_address;
+///
+/// assert_eq!(
+///     checksum_address("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"),
+///     "5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+/// );
+/// assert_eq!(
+///     checksum_address("fb6916095ca1df60bb79ce92ce3ea74c37c5d359"),
+///     "fB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"
+/// );
+/// ```
+pub fn checksum_address(hex_addr: &str) -> String {
+    let hash = keccak256(hex_addr.as_bytes());
+    let mut out = String::with_capacity(40);
+    for (i, c) in hex_addr.chars().enumerate() {
+        if !c.is_ascii_hexdigit() || c.is_ascii_digit() {
+            out.push(c);
+            continue;
+        }
+        // Nibble i of the hash: for i even, the high nibble of byte i/2.
+        let nibble = (hash[i / 2] >> if i % 2 == 0 { 4 } else { 0 }) & 0x0f;
+        if nibble >= 8 {
+            out.push(c.to_ascii_uppercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Bitcoin-style address from a public key: base58check of
@@ -447,5 +509,80 @@ mod tests {
         // Deterministic: same input => same output.
         assert_eq!(s, base58check(b"\x00\x01\x02\x03"));
         assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn eip55_spec_examples() {
+        // Every example from the EIP-55 spec.
+        let cases = [
+            (
+                "52908400098527886e0f7030069857d2e4169ee7",
+                "52908400098527886E0F7030069857D2E4169EE7",
+            ),
+            (
+                "8617e340b3d01fa5f11f306f4090fd50e238070d",
+                "8617E340B3D01FA5F11F306F4090FD50E238070D",
+            ),
+            (
+                "de709f2102306220921060314715629080e2fb77",
+                "de709f2102306220921060314715629080e2fb77",
+            ),
+            (
+                "27b1fdb04752bbc536007a920d24acb045561c26",
+                "27b1fdb04752bbc536007a920d24acb045561c26",
+            ),
+            (
+                "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+                "5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            ),
+            (
+                "fb6916095ca1df60bb79ce92ce3ea74c37c5d359",
+                "fB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+            ),
+            (
+                "dbf03b407c01e7cd3cbea99509d93f8dddc8c6fb",
+                "dbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+            ),
+            (
+                "d1220a0cf47c7b9be7a2e6ba89f429762e7b9adb",
+                "D1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+            ),
+        ];
+        for (lower, expected) in cases {
+            assert_eq!(checksum_address(lower), expected, "{lower}");
+        }
+    }
+
+    #[test]
+    fn addresses_are_eip55_checksummed() {
+        let m = Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+        let acct = Account::from_mnemonic(&m, 0).unwrap();
+        let addr = acct.address();
+        // Mixed-case: at least one letter must be uppercased by the checksum.
+        assert!(addr.chars().any(|c| c.is_ascii_uppercase()));
+        // Lowercasing must round-trip to the same 20-byte address.
+        assert_eq!(
+            checksum_address(&addr[2..].to_lowercase()),
+            &addr[2..],
+            "address must be a valid EIP-55 checksum of itself"
+        );
+    }
+
+    #[test]
+    fn invalid_paths_are_rejected() {
+        let m = Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+        let master = master_key_from_seed(&m.to_seed()).unwrap();
+        assert!(matches!(
+            master.derive_path("44'/0'/0'"),
+            Err(WalletError::InvalidPath { .. })
+        ));
+        assert!(matches!(
+            master.derive_path("m/44'/not-a-number"),
+            Err(WalletError::InvalidPath { .. })
+        ));
+        assert!(matches!(
+            master.derive_path("m/44'/2147483648"), // 2^31 without hardened marker
+            Err(WalletError::InvalidPath { .. })
+        ));
     }
 }

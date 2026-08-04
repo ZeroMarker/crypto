@@ -70,7 +70,7 @@ impl Transaction {
     }
 }
 
-/// A 80-byte-style header: previous hash, merkle root, time, compact bits
+/// A 80-byte header: previous hash, merkle root, time, compact bits
 /// (difficulty), and nonce. The work hash commits to all of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockHeader {
@@ -84,13 +84,16 @@ pub struct BlockHeader {
 
 impl BlockHeader {
     /// `hash256` over the header fields (prev ‖ merkle ‖ time ‖ bits ‖ nonce).
+    ///
+    /// All 8 bytes of `nonce` are serialized, so a header is uniquely
+    /// identified by its hash even for nonces beyond `u32::MAX`.
     pub fn hash(&self) -> [u8; 32] {
-        let mut buf = [0u8; 76];
+        let mut buf = [0u8; 80];
         buf[..32].copy_from_slice(&self.prev_hash);
         buf[32..64].copy_from_slice(&self.merkle_root);
         buf[64..68].copy_from_slice(&self.timestamp.to_le_bytes());
         buf[68..72].copy_from_slice(&self.bits.to_le_bytes());
-        buf[72..76].copy_from_slice(&(self.nonce as u32).to_le_bytes());
+        buf[72..80].copy_from_slice(&self.nonce.to_le_bytes());
         hash256(&buf)
     }
 }

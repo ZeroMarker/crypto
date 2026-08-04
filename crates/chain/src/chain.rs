@@ -124,11 +124,14 @@ impl BlockChain {
     pub fn active_chain(&self, from_height: u64) -> Vec<&Block> {
         let mut out = Vec::new();
         let mut cur = self.active_head;
-        while self.height_of(&cur).unwrap_or(0) >= from_height && cur != [0u8; 32] {
+        while let Some(height) = self.height_of(&cur) {
+            if height < from_height {
+                break;
+            }
             out.push(&self.blocks[&cur]);
             cur = self.blocks[&cur].header.prev_hash;
             if cur == [0u8; 32] {
-                break;
+                break; // reached genesis's parent
             }
         }
         out.reverse();

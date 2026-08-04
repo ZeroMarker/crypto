@@ -138,7 +138,9 @@ impl Mempool {
     }
 
     /// Apply a mined block: remove spent outpoints, add created ones, and drop
-    /// the block's transactions from the pool.
+    /// the block's transactions from the pool. Any pending transactions that
+    /// conflict with the block (they spend an outpoint the block spends) are
+    /// evicted too — a real mempool must not keep them around.
     pub fn apply_block(&mut self, block: &Block) {
         for tx in &block.txs {
             if !tx.is_coinbase() {
@@ -159,6 +161,37 @@ impl Mempool {
                 if tx.is_coinbase() {
                     self.utxo.coinbase.insert(op);
                 }
+            }
+        }
+        self.evict_conflicts(&block.txs);
+    }
+
+    /// Drop pending transactions that spend an outpoint the block already
+    /// spent. Their `spent` markers are removed so the UTXO set stays
+    /// consistent with the confirmed chain.
+    fn evict_conflicts(&mut self, confirmed: &[Transaction]) {
+        let spent_by_block: HashSet<OutPoint> = confirmed
+            .iter()
+            .filter(|tx| !tx.is_coinbase())
+            .flat_map(|tx| tx.inputs.iter().map(|i| i.prev_out))
+            .collect();
+        if spent_by_block.is_empty() {
+            return;
+        }
+        let evicted: Vec<[u8; 32]> = self
+            .txs
+            .iter()
+            .filter(|(_, tx)| {
+                tx.inputs
+                    .iter()
+                    .any(|i| spent_by_block.contains(&i.prev_out))
+            })
+            .map(|(txid, _)| *txid)
+            .collect();
+        for txid in evicted {
+            let tx = self.txs.remove(&txid).expect("present");
+            for txin in &tx.inputs {
+                self.utxo.spent.remove(&txin.prev_out);
             }
         }
     }

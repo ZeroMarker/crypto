@@ -8,7 +8,7 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
 | Phase | Crate | Status |
 |---|---|---|
 | 1 — Primitives | [`crypto-core`](crates/crypto-core) | ✅ implemented |
-| 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented |
+| 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented (incl. v3 keystore) |
 | 3 — Node/ledger | [`chain`](crates/chain) | ✅ ledger core |
 | 4 — Trading app | — | ⏳ planned |
 | 5 — Hardening | — | ⏳ planned |
@@ -16,10 +16,14 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
 ## What's implemented
 
 - **Hashing**: SHA-256, SHA3-256, Keccak-256 (Ethereum), RIPEMD-160, HMAC-SHA256
-- **Signatures**: ECDSA over secp256k1 (sign/verify, Ethereum `r‖s‖v` format)
+- **Signatures**: ECDSA over secp256k1 (sign/verify, Ethereum `r‖s‖v` format,
+  key recovery / `ecrecover`)
 - **AEAD**: AES-256-GCM and ChaCha20-Poly1305 with AAD binding
+- **KDFs**: HKDF-SHA256 (RFC 5869), PBKDF2-HMAC-SHA256 (RFC 8018),
+  constant-time comparisons
 - **Wallet**: BIP-39 mnemonic → seed, BIP-32 HD derivation (full `m/44'/...'`
-  paths), Ethereum + Bitcoin address derivation
+  paths), Ethereum (EIP-55) + Bitcoin address derivation, Ethereum v3 JSON
+  keystore (password-encrypted private keys)
 - **Chain**: merkle roots + SPV proofs, compact-bits PoW, block validation,
   longest-chain reorgs, UTXO-backed mempool
 
@@ -34,6 +38,7 @@ cargo test --workspace
 cargo run -p crypto-core --example hashes
 cargo run -p crypto-core --example signing
 cargo run -p wallet --example mnemonic_to_address
+cargo run -p wallet --example keystore
 cargo run -p chain --example demo
 ```
 

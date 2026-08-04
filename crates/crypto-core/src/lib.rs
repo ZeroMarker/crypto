@@ -138,11 +138,185 @@ pub mod hash {
     }
 }
 
+/// Constant-time helpers for comparing secrets and digests.
+///
+/// `==` on `[u8]` short-circuits on the first differing byte, leaking *where*
+/// the inputs differ through timing. That is enough to recover passwords,
+/// HMAC tags, or AEAD keys one byte at a time over many measurements. All
+/// comparisons here take time proportional to the length of the inputs only.
+pub mod ct {
+    /// Constant-time equality for fixed-size byte arrays.
+    ///
+    /// ```
+    /// use crypto_core::ct::{ct_eq, ct_eq_slices};
+    ///
+    /// assert!(ct_eq(&[1u8, 2, 3], &[1u8, 2, 3]));
+    /// assert!(!ct_eq(&[1u8, 2, 3], &[1u8, 2, 4]));
+    /// // Different lengths always compare unequal (no timing signal about
+    /// // *where* they differ):
+    /// assert!(!ct_eq_slices(&[1u8, 2, 3], &[1u8, 2]));
+    /// ```
+    pub fn ct_eq<const N: usize>(a: &[u8; N], b: &[u8; N]) -> bool {
+        subtle::ConstantTimeEq::ct_eq(a.as_slice(), b.as_slice()).into()
+    }
+
+    /// Constant-time equality for (possibly different-length) byte slices.
+    pub fn ct_eq_slices(a: &[u8], b: &[u8]) -> bool {
+        subtle::ConstantTimeEq::ct_eq(a, b).into()
+    }
+}
+
+/// Key derivation.
+///
+/// HKDF-SHA256 (RFC 5869) turns a possibly-weak input key material into
+/// arbitrarily long, cryptographically strong keying material, optionally
+/// bound to a salt and application context (`info`). Used for:
+///
+/// - deriving per-device keys from a master secret
+/// - deriving a session key from an ECDH shared secret
+/// - splitting one key into separate encryption/MAC keys
+pub mod kdf {
+    use crate::hash::hmac_sha256;
+
+    /// Errors from key derivation (HKDF / PBKDF2).
+    #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+    pub enum KdfError {
+        /// The requested output length exceeds the KDF's limit (255 * 32 bytes
+        /// for HKDF, (2^32 - 1) * 32 bytes for PBKDF2).
+        #[error("requested output length {0} exceeds the KDF limit")]
+        OutputTooLong(usize),
+        /// PBKDF2 requires at least one iteration.
+        #[error("iteration count must be >= 1")]
+        ZeroIterations,
+    }
+
+    /// HKDF-SHA256 (RFC 5869).
+    ///
+    /// - `ikm` — input key material (the secret you're stretching).
+    /// - `salt` — optional; an empty slice uses `HashLen` zeros as the salt
+    ///   (valid per the RFC). A random salt makes output key material
+    ///   independent of the ikm's statistical structure.
+    /// - `info` — optional application context; binds the output to its use,
+    ///   so keys for different purposes never collide.
+    /// - `out_len` — number of output bytes (1..=255*32).
+    ///
+    /// ```
+    /// use crypto_core::kdf::hkdf_sha256;
+    /// use hex::ToHex;
+    ///
+    /// // RFC 5869 test case 1
+    /// let ikm = hex::decode("0b" .repeat(22)).unwrap();
+    /// let salt = hex::decode("000102030405060708090a0b0c").unwrap();
+    /// let info = hex::decode("f0f1f2f3f4f5f6f7f8f9").unwrap();
+    /// let okm = hkdf_sha256(&ikm, &salt, &info, 42).unwrap();
+    /// assert_eq!(
+    ///     okm.encode_hex::<String>(),
+    ///     "3cb25f25faacd57a90434f64d0362f2a\
+    ///      2d2d0a90cf1a5a4c5db02d56ecc4c5bf\
+    ///      34007208d5b887185865"
+    /// );
+    /// ```
+    pub fn hkdf_sha256(
+        ikm: &[u8],
+        salt: &[u8],
+        info: &[u8],
+        out_len: usize,
+    ) -> Result<Vec<u8>, KdfError> {
+        if out_len > 255 * 32 {
+            return Err(KdfError::OutputTooLong(out_len));
+        }
+
+        // Extract: PRK = HMAC-SHA256(salt, IKM). An empty salt is replaced by
+        // 32 zero bytes (the RFC's "HashLen zeroes").
+        let prk = hmac_sha256(if salt.is_empty() { &[0u8; 32] } else { salt }, ikm);
+
+        // Expand: T(0) = empty, T(i) = HMAC(PRK, T(i-1) || info || i), with a
+        // single-byte block counter capped at 255 by the length check above.
+        // (u16 so the counter never overflows at the 255*32 boundary.)
+        let mut out = Vec::with_capacity(out_len);
+        let mut t = Vec::new(); // T(i-1)
+        let mut counter = 1u16;
+        while out.len() < out_len {
+            t.extend_from_slice(info);
+            t.push(counter as u8);
+            t = hmac_sha256(&prk, &t).to_vec();
+            let take = (out_len - out.len()).min(t.len());
+            out.extend_from_slice(&t[..take]);
+            counter += 1;
+        }
+        Ok(out)
+    }
+
+    /// PBKDF2-HMAC-SHA256 (RFC 8018 §5.2).
+    ///
+    /// Password-based key derivation: stretches a low-entropy password into a
+    /// `dk_len`-byte key. Each guess costs `iterations` HMAC-SHA256 rounds, so
+    /// brute force is deliberately expensive. `salt` should be unique per
+    /// password (random for new keys, stored alongside the derived key).
+    ///
+    /// Used by the Ethereum v3 keystore format and BIP-39 seeds.
+    ///
+    /// ```
+    /// use crypto_core::kdf::pbkdf2_sha256;
+    /// use hex::ToHex;
+    ///
+    /// // RFC 7914 §11 test vector (PBKDF2-HMAC-SHA256)
+    /// let dk = pbkdf2_sha256(b"password", b"salt", 1, 32).unwrap();
+    /// assert_eq!(
+    ///     dk.encode_hex::<String>(),
+    ///     "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+    /// );
+    /// ```
+    pub fn pbkdf2_sha256(
+        password: &[u8],
+        salt: &[u8],
+        iterations: u32,
+        dk_len: usize,
+    ) -> Result<Vec<u8>, KdfError> {
+        if iterations == 0 {
+            return Err(KdfError::ZeroIterations);
+        }
+        if dk_len > (u32::MAX as usize) * 32 {
+            return Err(KdfError::OutputTooLong(dk_len));
+        }
+
+        // DK = T_1 || T_2 || ... || T_l, one 32-byte block per counter value.
+        // T_i = U_1 XOR U_2 XOR ... XOR U_c, where U_1 = PRF(P, S || INT(i))
+        // and U_j = PRF(P, U_{j-1}) with INT(i) a 4-byte big-endian counter.
+        let blocks = dk_len.div_ceil(32);
+        let mut out = Vec::with_capacity(blocks * 32);
+        for block in 1..=blocks as u32 {
+            let mut u = Vec::with_capacity(salt.len() + 4);
+            u.extend_from_slice(salt);
+            u.extend_from_slice(&block.to_be_bytes());
+            u = hmac_sha256(password, &u).to_vec();
+            let mut t = u.clone();
+            for _ in 1..iterations {
+                u = hmac_sha256(password, &u).to_vec();
+                for (x, y) in t.iter_mut().zip(u.iter()) {
+                    *x ^= *y;
+                }
+            }
+            out.extend_from_slice(&t);
+        }
+        out.truncate(dk_len);
+        Ok(out)
+    }
+}
+
 /// Authenticated encryption with associated data (AEAD).
+///
+/// Nonce generation is the one place AEAD fails catastrophically: reusing a
+/// `(key, nonce)` pair lets an attacker recover the keystream and forge tags.
+/// Every encryption here therefore draws a fresh 12-byte nonce from the OS
+/// CSPRNG (`getrandom`), so the same plaintext encrypted twice produces two
+/// unrelated ciphertexts. If you need reproducible ciphertexts (golden test
+/// vectors), use the explicit-`nonce` variants and never reuse a nonce with
+/// the same key in production.
 pub mod aead {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
-    use aes_gcm::{Aes256Gcm, Key, Nonce};
-    use chacha20poly1305::ChaCha20Poly1305;
+    use aes_gcm::{Aes256Gcm, Key, Nonce as AesNonce};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChachaNonce};
 
     /// A nonce + ciphertext + tag bundle ready for storage.
     ///
@@ -154,8 +328,16 @@ pub mod aead {
         pub data: Vec<u8>,
     }
 
-    /// AES-256-GCM encrypt with a random 12-byte nonce. `aad` is authenticated
-    /// but not encrypted (e.g. the address the ciphertext belongs to).
+    /// Draw 12 random bytes from the OS CSPRNG.
+    fn random_nonce() -> [u8; 12] {
+        let mut nonce = [0u8; 12];
+        getrandom::getrandom(&mut nonce).expect("OS CSPRNG must be available");
+        nonce
+    }
+
+    /// AES-256-GCM encrypt with a fresh random 12-byte nonce. `aad` is
+    /// authenticated but not encrypted (e.g. the address the ciphertext
+    /// belongs to).
     ///
     /// ```
     /// use crypto_core::aead::{decrypt_aes_gcm, encrypt_aes_gcm};
@@ -170,16 +352,22 @@ pub mod aead {
         plaintext: &[u8],
         aad: &[u8],
     ) -> Result<Ciphertext, aes_gcm::Error> {
+        encrypt_aes_gcm_with_nonce(key, random_nonce(), plaintext, aad)
+    }
+
+    /// AES-256-GCM encrypt under an explicit nonce. **Tests/vectors only**:
+    /// reusing a nonce with the same key is fatal for GCM.
+    pub fn encrypt_aes_gcm_with_nonce(
+        key: &[u8; 32],
+        nonce: [u8; 12],
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Ciphertext, aes_gcm::Error> {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-        let mut nonce = [0u8; 12];
-        // A real app should use a CSPRNG (OsRng). This is deterministic for tests only.
-        for (i, b) in plaintext.iter().take(nonce.len()).enumerate() {
-            nonce[i] = b.wrapping_add(1);
-        }
-        // aes-gcm's allocating encrypt() returns ciphertext+tag (nonce is kept
-        // separately in `Ciphertext.nonce`).
+        // aes-gcm's allocating encrypt() returns ciphertext+tag; the nonce is
+        // kept separately in `Ciphertext.nonce`.
         let out = cipher.encrypt(
-            Nonce::from_slice(&nonce),
+            AesNonce::from_slice(&nonce),
             Payload {
                 msg: plaintext,
                 aad,
@@ -199,10 +387,13 @@ pub mod aead {
         aad: &[u8],
     ) -> Result<Vec<u8>, aes_gcm::Error> {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-        cipher.decrypt(Nonce::from_slice(&ct.nonce), Payload { msg: &ct.data, aad })
+        cipher.decrypt(
+            AesNonce::from_slice(&ct.nonce),
+            Payload { msg: &ct.data, aad },
+        )
     }
 
-    /// ChaCha20-Poly1305 encrypt with a random 12-byte nonce.
+    /// ChaCha20-Poly1305 encrypt with a fresh random 12-byte nonce.
     ///
     /// Preferred over AES-GCM on hardware without AES-NI (common on cloud VMs).
     pub fn encrypt_chacha(
@@ -210,14 +401,20 @@ pub mod aead {
         plaintext: &[u8],
         aad: &[u8],
     ) -> Result<Ciphertext, chacha20poly1305::aead::Error> {
-        use chacha20poly1305::aead::{Aead, Payload};
+        encrypt_chacha_with_nonce(key, random_nonce(), plaintext, aad)
+    }
+
+    /// ChaCha20-Poly1305 encrypt under an explicit nonce. **Tests/vectors
+    /// only**: nonce reuse with the same key destroys confidentiality.
+    pub fn encrypt_chacha_with_nonce(
+        key: &[u8; 32],
+        nonce: [u8; 12],
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Ciphertext, chacha20poly1305::aead::Error> {
         let cipher = ChaCha20Poly1305::new_from_slice(key).expect("32-byte key");
-        let mut nonce = [0u8; 12];
-        for (i, b) in plaintext.iter().take(nonce.len()).enumerate() {
-            nonce[i] = b.wrapping_add(2);
-        }
         let out = cipher.encrypt(
-            chacha20poly1305::Nonce::from_slice(&nonce),
+            ChachaNonce::from_slice(&nonce),
             Payload {
                 msg: plaintext,
                 aad,
@@ -235,10 +432,9 @@ pub mod aead {
         ct: &Ciphertext,
         aad: &[u8],
     ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
-        use chacha20poly1305::aead::{Aead, Payload};
         let cipher = ChaCha20Poly1305::new_from_slice(key).expect("32-byte key");
         cipher.decrypt(
-            chacha20poly1305::Nonce::from_slice(&ct.nonce),
+            ChachaNonce::from_slice(&ct.nonce),
             Payload { msg: &ct.data, aad },
         )
     }
@@ -247,11 +443,15 @@ pub mod aead {
 /// Digital signatures.
 pub mod sign {
     use hex::ToHex;
-    use k256::ecdsa::{signature::Verifier, Signature, SigningKey, VerifyingKey};
+    use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
 
     /// An ECDSA signature over secp256k1, serialized as 65-byte `r || s || v`
     /// (Ethereum "raw" format) or 64-byte `r || s` (compact). Keep `v` for
     /// Ethereum-style recovery; drop it for Bitcoin.
+    ///
+    /// `s` is always normalized to the low half of the curve order
+    /// (EIP-2 canonical form), and `v` is the recovery id consistent with
+    /// that normalization, so [`recover_verifying_key`] round-trips.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct SignatureData {
         pub r: [u8; 32],
@@ -275,29 +475,53 @@ pub mod sign {
     }
 
     /// Sign a 32-byte digest (the thing you hash with [`crate::hash::sha256`]
-    /// or [`crate::hash::keccak256`] first). Returns `r || s || v`.
+    /// or [`crate::hash::keccak256`] first). Returns `r || s || v` with `s` in
+    /// canonical low-`s` form (EIP-2) and `v` matching, so the signature can
+    /// be recovered back to the public key.
     pub fn sign_digest(sk: &SigningKey, digest: &[u8; 32]) -> SignatureData {
-        let (sig, recovery_id) = sk.sign_recoverable(digest).expect("sign");
-        let (r, s, v) = (
-            sig.r().to_bytes(),
-            sig.s().to_bytes(),
-            recovery_id.to_byte(),
-        );
+        // `sign_prehash_recoverable` already normalizes `s` to the low half of
+        // the curve order and returns the `RecoveryId` consistent with that
+        // normalization, so no manual low-`s` fix-up is needed.
+        let (sig, recovery_id) = sk.sign_prehash_recoverable(digest).expect("sign");
         SignatureData {
-            r: r.into(),
-            s: s.into(),
-            v,
+            r: sig.r().to_bytes().into(),
+            s: sig.s().to_bytes().into(),
+            v: recovery_id.to_byte(),
         }
     }
 
     /// Verify `sig` against `digest` and public key. Constant-time against the
     /// public key; use on-chain-recovered values from trusted input.
     pub fn verify_digest(pk: &VerifyingKey, digest: &[u8; 32], sig: &SignatureData) -> bool {
-        let bytes: [u8; 64] = [sig.r, sig.s].concat().try_into().unwrap();
+        use k256::ecdsa::signature::hazmat::PrehashVerifier;
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r);
+        bytes[32..].copy_from_slice(&sig.s);
         match Signature::try_from(bytes.as_slice()) {
-            Ok(s) => pk.verify(digest, &s).is_ok(),
+            Ok(s) => pk.verify_prehash(digest, &s).is_ok(),
             Err(_) => false,
         }
+    }
+
+    /// Recover the signer's public key from a digest and `r || s || v`
+    /// signature (Ethereum-style). Returns `None` for malformed signatures or
+    /// an out-of-range `v`.
+    ///
+    /// ```
+    /// use crypto_core::sign::recover_verifying_key;
+    ///
+    /// let (sk, pk) = crypto_core::sign::keypair_from_seed(&[5u8; 32]);
+    /// let sig = crypto_core::sign::sign_digest(&sk, &[9u8; 32]);
+    /// let recovered = recover_verifying_key(&[9u8; 32], &sig).unwrap();
+    /// assert_eq!(recovered, pk);
+    /// ```
+    pub fn recover_verifying_key(digest: &[u8; 32], sig: &SignatureData) -> Option<VerifyingKey> {
+        let id = RecoveryId::from_byte(sig.v)?;
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r);
+        bytes[32..].copy_from_slice(&sig.s);
+        let s = Signature::try_from(bytes.as_slice()).ok()?;
+        VerifyingKey::recover_from_prehash(digest, &s, id).ok()
     }
 
     /// Convert a `SignatureData` to its hex form `0x..` (64 bytes, no `v`).
@@ -311,5 +535,109 @@ pub mod sign {
         let mut out = sig.r.to_vec();
         out.extend_from_slice(&sig.s);
         format!("0x{}", out.encode_hex::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ct::ct_eq;
+    use crate::hash::hmac_sha256;
+    use crate::kdf::{hkdf_sha256, pbkdf2_sha256, KdfError};
+
+    #[test]
+    fn ct_eq_basic() {
+        assert!(ct_eq(&[1u8; 8], &[1u8; 8]));
+        assert!(!ct_eq(&[1u8; 8], &[2u8; 8]));
+        // A single differing trailing byte must be caught.
+        assert!(!ct_eq(&[1u8, 2, 3, 4], &[1u8, 2, 3, 5]));
+    }
+
+    #[test]
+    fn hkdf_rfc5869_case_1() {
+        // RFC 5869 test case 1: SHA-256, 42-byte OKM.
+        let ikm = b"\x0b".repeat(22);
+        let salt = hex::decode("000102030405060708090a0b0c").unwrap();
+        let info = hex::decode("f0f1f2f3f4f5f6f7f8f9").unwrap();
+        let okm = hkdf_sha256(&ikm, &salt, &info, 42).unwrap();
+        assert_eq!(
+            hex::encode(&okm),
+            "3cb25f25faacd57a90434f64d0362f2a\
+             2d2d0a90cf1a5a4c5db02d56ecc4c5bf\
+             34007208d5b887185865"
+        );
+    }
+
+    #[test]
+    fn hkdf_rfc5869_case_3_no_salt_no_info() {
+        // RFC 5869 test case 3: empty salt and info (exercise the
+        // zero-salt fallback and long output > one block).
+        let ikm = b"\x0b".repeat(22);
+        let okm = hkdf_sha256(&ikm, &[], &[], 42).unwrap();
+        assert_eq!(
+            hex::encode(&okm),
+            "8da4e775a563c18f715f802a063c5a31\
+             b8a11f5c5ee1879ec3454e5f3c738d2d\
+             9d201395faa4b61a96c8"
+        );
+    }
+
+    #[test]
+    fn hkdf_rejects_overlong_output() {
+        assert!(hkdf_sha256(b"ikm", b"", b"", 255 * 32 + 1).is_err());
+        assert!(hkdf_sha256(b"ikm", b"", b"", 255 * 32).is_ok());
+    }
+
+    #[test]
+    fn pbkdf2_rfc7914_vectors() {
+        // RFC 7914 §11: PBKDF2-HMAC-SHA256 vectors.
+        assert_eq!(
+            hex::encode(pbkdf2_sha256(b"password", b"salt", 1, 32).unwrap()),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
+        assert_eq!(
+            hex::encode(pbkdf2_sha256(b"password", b"salt", 2, 32).unwrap()),
+            "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"
+        );
+        assert_eq!(
+            hex::encode(pbkdf2_sha256(b"password", b"salt", 4096, 32).unwrap()),
+            "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"
+        );
+    }
+
+    #[test]
+    fn pbkdf2_multi_block_and_errors() {
+        // 64-byte output exercises the T_1 || T_2 block concatenation.
+        let dk = pbkdf2_sha256(b"password", b"salt", 1, 64).unwrap();
+        assert_eq!(dk.len(), 64);
+        // The first 32 bytes are the RFC vector above (deterministic blocks).
+        assert_eq!(
+            hex::encode(&dk[..32]),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
+        // Zero iterations are rejected, not silently accepted.
+        assert!(matches!(
+            pbkdf2_sha256(b"password", b"salt", 0, 32),
+            Err(KdfError::ZeroIterations)
+        ));
+        // 32-byte truncation of a longer derivation.
+        assert_eq!(
+            pbkdf2_sha256(b"password", b"salt", 1, 16).unwrap(),
+            &pbkdf2_sha256(b"password", b"salt", 1, 32).unwrap()[..16]
+        );
+    }
+
+    #[test]
+    fn hkdf_splits_one_key_into_two_independent_ones() {
+        // Deriving for different `info` contexts must give unrelated keys:
+        // the real reason to bind keys to their purpose.
+        let master = hmac_sha256(b"master", b"seed");
+        let enc = hkdf_sha256(&master, b"salt", b"encryption", 32).unwrap();
+        let mac = hkdf_sha256(&master, b"salt", b"mac", 32).unwrap();
+        assert_ne!(enc, mac);
+        // And the derivation is deterministic.
+        assert_eq!(
+            enc,
+            hkdf_sha256(&master, b"salt", b"encryption", 32).unwrap()
+        );
     }
 }

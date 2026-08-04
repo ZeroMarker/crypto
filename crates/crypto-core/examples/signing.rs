@@ -1,4 +1,5 @@
-//! Example: sign and verify a message digest with secp256k1 (Ethereum-style).
+//! Example: sign and verify a message digest with secp256k1 (Ethereum-style),
+//! then recover the signer's public key from the signature (ecrecover).
 //!
 //! Run with:
 //! ```sh
@@ -23,4 +24,9 @@ fn main() {
     // A tampered digest must NOT verify.
     let bad = keccak256(b"transfer 999 USDC to 0x1234");
     println!("tampered:  {}", sign::verify_digest(&pk, &bad, &sig));
+
+    // Recover the signer from `r || s || v` alone — this is what on-chain
+    // `ecrecover` does to reconstruct the sender's address.
+    let recovered = sign::recover_verifying_key(&digest, &sig).expect("valid signature");
+    println!("recovered: {}", recovered == pk);
 }
