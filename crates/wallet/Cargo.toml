@@ -15,6 +15,7 @@ thiserror.workspace = true
 getrandom = "0.2"
 serde.workspace = true
 serde_json.workspace = true
+primitive-types.workspace = true
 
 # JSON-RPC node client (blocking HTTP)
 ureq = { version = "3", features = ["json"] }

@@ -27,6 +27,7 @@ use bip39::{Language, Mnemonic as Bip39Mnemonic};
 use crypto_core::hash::{keccak256, ripemd160, sha256};
 use k256::ecdsa::SigningKey;
 
+pub mod abi;
 pub mod keystore;
 pub mod rpc;
 pub mod tx;
