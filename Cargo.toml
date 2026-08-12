@@ -4,6 +4,7 @@ members = [
     "crates/crypto-core",
     "crates/wallet",
     "crates/chain",
+    "crates/trading",
 ]
 
 [workspace.package]

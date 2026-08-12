@@ -1,58 +1,81 @@
 # Phase 4 — Trading / analytics app
 
-Not yet implemented. This phase uses the crypto plumbing for a market data,
-backtesting, and execution stack.
+Implemented in `crates/trading` (M3 done). A market data, backtesting and
+paper-trading stack, teaching-grade and dependency-light (blocking HTTPS,
+no async runtime).
 
 ## Architecture
 
 ```text
-exchanges ──WS/HTTP──▶ market data feed ──▶ OHLCV aggregation
-                                                │
-                              indicators (ta) ◀─┘
-                                                │
-                         backtest engine ──▶ strategy
-                                                │
-                        execution/paper broker ◀┘
-                                                │
-                                        position & PnL ledger
+exchanges ──HTTPS──▶ [data] klines ──▶ [bar] OHLCV series
+                                              │
+                              [indicator] ◀───┘  (sma / ema / rsi)
+                                              │
+                    [strategy] ──▶ [backtest] ──▶ [broker] fills
+                                              │
+                                     [risk] position & stop-loss limits
+                                              │
+                                     [report] equity curve & metrics
 ```
 
-## Suggested crate map
+## Module map (`crates/trading/src/`)
 
-| Concern | Crate |
+| Module | Concern |
 |---|---|
-| HTTP/WS | `reqwest`, `tokio-tungstenite` |
-| Time series | `sqlx` + Postgres, or `redb` for embedded |
-| Indicators | `ta`, `candle` |
-| Async | `tokio` |
-| Logging | `tracing` |
-| Config | `figment` / env vars |
+| `data.rs` | Binance-style klines over HTTPS (`DataClient`), JSON save/load |
+| `bar.rs` | `Bar` OHLCV, resampling, trade aggregation |
+| `indicator.rs` | SMA, EMA, RSI (Wilder) — aligned `Option`-padded vectors |
+| `strategy.rs` | `Strategy` trait, `SmaCrossover`, `BuyAndHold` |
+| `backtest.rs` | event-driven loop: stop-loss at open, signal at close, equity curve, max drawdown, annualized Sharpe |
+| `broker.rs` | paper broker: fees, slippage, average-cost basis, realized PnL |
+| `risk.rs` | max position fraction, stop-loss trigger |
+| `report.rs` | metrics + sparkline equity curve |
+| `bin/trade.rs` | CLI: `fetch`, `backtest`, `live` |
 
-## Building blocks
+## CLI
 
-```rust
-// Sketch: an OHLCV bar and a simple moving average.
-#[derive(Clone)]
-struct Bar { open: f64, high: f64, low: f64, close: f64, volume: f64 }
+```bash
+# Fetch and cache klines (offline backtests are reproducible)
+trade fetch BTCUSDT 1h 500 --out btc.json
 
-fn sma(closes: &[f64], period: usize) -> Option<f64> {
-    if closes.len() < period { return None; }
-    Some(closes[closes.len() - period..].iter().sum::<f64>() / period as f64)
-}
+# Backtest the SMA crossover (fast 10 / slow 30) on cached data
+trade backtest --data btc.json --fast 10 --slow 30 --cash 10000
+
+# Or backtest straight from the exchange
+trade backtest --symbol BTCUSDT --interval 1h --limit 500
+
+# Paper-trade live: poll, act on each completed bar, print the account
+trade live BTCUSDT 1h --fast 10 --slow 30 --cash 10000
 ```
 
-## Paper-trading milestone
+Market data defaults to `https://api.binance.us` (the `api.binance.com`
+endpoint is geo-restricted from some networks); set `TRADING_API_BASE` to
+point at any Binance-compatible klines mirror.
 
-- Ingest live order books + trades from a sandbox exchange.
-- Run a backtested strategy on real-time bars.
-- Track positions and PnL without real capital.
+## Design notes
 
-## Done-when
+- **Fills** happen at the bar close with a flat fee + slippage; buys execute
+  at `price × (1 + slippage)`, sells at `price × (1 − slippage)`.
+- **Positions** are fractional (exchanges trade decimals, not whole coins),
+  sized by `equity × max_position_frac / price`.
+- **Risk** runs before the strategy each bar: the stop-loss is checked at the
+  bar *open* so a gap can't slip past yesterday's close.
+- **Reproducibility**: backtests are pure functions of (bars, config) — no
+  randomness. `trade fetch --out` saves the input for later replay.
+- Prices and cash are `f64`: this is analysis-grade plumbing, not accounting;
+  Phase 5 hardening covers what a real-money system needs (exact integer
+  amounts, rate limiting, audits, fault drills).
 
-- Backtests are reproducible (seeded RNG, recorded data).
-- The paper bot runs a strategy live without crashing on reconnects.
-- PnL, drawdown, and order fills are queryable.
+## Done-when (roadmap)
+
+- Backtests are reproducible (recorded data, no RNG). ✅
+- The paper bot runs a strategy live without crashing on reconnects
+  (`trade live` polls with retry/backoff). ✅
+- PnL, drawdown, and order fills are queryable (report metrics + broker
+  `fills()`). ✅
 
 ## Next
 
-[Phase 5 — Production hardening](06-hardening.md) makes it safe for real funds.
+[Phase 5 — Production hardening](06-hardening.md) makes it safe for real funds:
+secret handling, `cargo audit`/fuzzing, `tracing` observability, resilience
+drills.

@@ -1,0 +1,15 @@
+[package]
+name = "trading"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+# Blocking HTTP for market data (same client the wallet uses for JSON-RPC).
+ureq = { version = "3", features = ["json"] }
+
+[dev-dependencies]

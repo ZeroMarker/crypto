@@ -41,8 +41,9 @@ and Ethereum tx build/sign/parse implemented in `crates/wallet`** — see
       (RLP encoding, `from_raw` decoding)
 - [x] Sign with Phase 1 keys; canonical serialization (RLP for EVM),
       ecrecover sender recovery
-- [ ] Fee estimation and nonce/sequence management
-- [ ] Node client over JSON-RPC (read state, broadcast tx, wait for receipt)
+- [x] Fee estimation and nonce/sequence management (JSON-RPC `feeHistory`,
+      pending nonce, in `crates/wallet/src/rpc.rs`)
+- [x] Node client over JSON-RPC (read state, broadcast tx, wait for receipt)
 - [x] Address derivation from pubkey (checksums, bech32)
 
 Done when: a signed transaction is accepted on a testnet (Sepolia / testnet3).
@@ -55,21 +56,29 @@ implemented in `crates/chain`** — see
 - [x] Simple chain with Proof-of-Work (difficulty target, headers, merkle root)
 - [x] Merkle tree + SPV proofs
 - [x] Mempool, block validation, reorg handling
-- [ ] P2P layer for syncing blocks (libp2p)
-- [ ] EVM execution with `revm`
+- [x] P2P layer for syncing blocks (dependency-free TCP sync in
+      `crates/chain/src/p2p.rs`: handshake, pull, reorg, announce)
+- [x] EVM execution (teaching-grade interpreter in `crates/chain/src/evm.rs`:
+      stack, memory, storage, jumps, CALL/CREATE, gas)
 
 Done when: two nodes sync a chain over P2P and agree on the same canonical tip.
 
 ## Phase 4 — Trading / analytics app
-Goal: turn the plumbing into a useful application. **Planned** — see
+Goal: turn the plumbing into a useful application. **Implemented in
+`crates/trading`** — see
 [docs/05-trading.md](docs/05-trading.md).
 
-- [ ] Market data ingestion (WebSocket/HTTP): order books, trades, candles
-- [ ] OHLCV aggregation + storage (time-series DB, e.g. `sqlx` + Postgres)
-- [ ] Indicators & backtesting engine (`tick`-based, portfolio metrics)
-- [ ] Execution: order placement, fills, position/PnL tracking
-- [ ] Risk controls: max position, stop-loss, rate limiting
-- [ ] Dashboard/CLI or TUI to monitor live state
+- [x] Market data ingestion (HTTPS klines client in `data.rs`, Binance-style
+      REST, endpoint overridable via `TRADING_API_BASE`)
+- [x] OHLCV aggregation + storage (`bar.rs`: resampling, trade aggregation,
+      JSON persistence for reproducible offline backtests)
+- [x] Indicators & backtesting engine (`indicator.rs` SMA/EMA/RSI,
+      `backtest.rs` event-driven loop with equity curve, drawdown, Sharpe)
+- [x] Execution: paper broker (`broker.rs`: fees, slippage, avg-cost basis,
+      fills at bar close)
+- [x] Risk controls (`risk.rs`: max position fraction, stop-loss)
+- [x] Dashboard/CLI (`src/bin/trade.rs`: `fetch` / `backtest` / `live` paper
+      trading loop with report + sparkline)
 
 Done when: a paper-trading bot runs a backtested strategy live against a sandbox exchange.
 
@@ -108,9 +117,9 @@ Done when: a test-run passes with injected faults and no funds/state corruption.
 | Misc             | `serde`, `serde_json`, `tracing`, `thiserror`     |
 
 ## Milestones (suggested order)
-1. **M1 — Keys & wallet** (Phases 0–2): offline signer CLI + testnet broadcast. *First win.* ✅ `crypto-core` + `wallet` done.
-2. **M2 — Chain understanding** (Phase 3): small POW chain + EVM exec. 🚧 `chain` ledger core done (merkle/SPV, PoW, validation, reorg, mempool); P2P + EVM open.
-3. **M3 — Trading bot** (Phase 4): backtester + paper trader.
-4. **M4 — Hardened** (Phase 5): audits, fuzzing, fault drills.
+1. **M1 — Keys & wallet** (Phases 0–2): offline signer CLI + testnet broadcast. ✅ `crypto-core` + `wallet` done.
+2. **M2 — Chain understanding** (Phase 3): small POW chain + EVM exec. ✅ `chain` complete: merkle/SPV, PoW, validation, reorg, mempool, P2P sync, EVM interpreter.
+3. **M3 — Trading bot** (Phase 4): backtester + paper trader. ✅ `trading` crate: klines, OHLCV, indicators, backtest, paper broker, risk, `trade` CLI.
+4. **M4 — Hardened** (Phase 5): audits, fuzzing, fault drills. 🚧 next up.
 
 Start at M1. Everything before it is dependency; everything after is polish.

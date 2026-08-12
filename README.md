@@ -8,9 +8,9 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
 | Phase | Crate | Status |
 |---|---|---|
 | 1 — Primitives | [`crypto-core`](crates/crypto-core) | ✅ implemented |
-| 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented (keystore, tx signing) |
-| 3 — Node/ledger | [`chain`](crates/chain) | ✅ ledger core |
-| 4 — Trading app | — | ⏳ planned |
+| 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented (keystore, tx signing, JSON-RPC) |
+| 3 — Node/ledger | [`chain`](crates/chain) | ✅ implemented (P2P sync + EVM) |
+| 4 — Trading app | [`trading`](crates/trading) | ✅ implemented (backtest + paper trader) |
 | 5 — Hardening | — | ⏳ planned |
 
 ## What's implemented
@@ -28,7 +28,12 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
   transaction build/sign/parse, ecrecover sender recovery — pinned against
   the official EIP-155 vector
 - **Chain**: merkle roots + SPV proofs, compact-bits PoW, block validation,
-  longest-chain reorgs, UTXO-backed mempool
+  longest-chain reorgs, UTXO-backed mempool, dependency-free P2P block sync,
+  teaching-grade EVM interpreter (stack, memory, storage, CALL/CREATE, gas)
+- **Trading**: Binance-style klines client, OHLCV resampling + trade
+  aggregation, SMA/EMA/RSI indicators, event-driven backtester (drawdown,
+  Sharpe), paper broker (fees/slippage), risk controls, and a `trade` CLI
+  (`fetch` / `backtest` / `live` paper trading)
 
 All primitives validated against official test vectors (NIST, RFC 4231, BIP-39,
 BIP-32); the chain is validated against Bitcoin block 100000 and the genesis
@@ -60,8 +65,9 @@ cargo run -p chain --example demo
 ```
 crates/
 ├── crypto-core/   # hash, sign, aead + examples
-├── wallet/        # bip39, bip32, addresses + examples
-└── chain/         # merkle/spv, pow, chain, mempool + examples
+├── wallet/        # bip39, bip32, addresses, tx signing, JSON-RPC + examples
+├── chain/         # merkle/spv, pow, chain, mempool, p2p, evm + examples
+└── trading/       # klines, indicators, backtest, paper broker, risk, `trade` CLI
 docs/              # per-phase guides
 ROADMAP.md         # the plan
 ```
