@@ -18,3 +18,8 @@ getrandom.workspace = true
 subtle.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "primitives"
+harness = false

@@ -39,6 +39,9 @@ bip39 = { version = "2", features = ["rand"] }
 # ABI encoding for contract calls (256-bit integers)
 primitive-types = { version = "0.12", default-features = false, features = ["std"] }
 
+# Benchmarking (roadmap Phase 0 checklist item)
+criterion = "0.5"
+
 # Optimize third-party dependencies even in debug builds: keeps our own
 # crates debuggable while hashing/crypto (sha2, aes, ...) runs at release
 # speed. PBKDF2 at 262144 iterations and PoW mining would otherwise make
