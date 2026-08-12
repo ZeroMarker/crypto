@@ -30,6 +30,7 @@ use k256::ecdsa::SigningKey;
 pub mod abi;
 pub mod keystore;
 pub mod rpc;
+pub mod secrets;
 pub mod tx;
 
 /// Errors produced by wallet operations.

@@ -42,6 +42,13 @@ primitive-types = { version = "0.12", default-features = false, features = ["std
 # Benchmarking (roadmap Phase 0 checklist item)
 criterion = "0.5"
 
+# Zeroization for secret material (roadmap Phase 5 "secret handling")
+zeroize = "1"
+
+# Structured logging + metrics (roadmap Phase 5 "observability")
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
 # Optimize third-party dependencies even in debug builds: keeps our own
 # crates debuggable while hashing/crypto (sha2, aes, ...) runs at release
 # speed. PBKDF2 at 262144 iterations and PoW mining would otherwise make

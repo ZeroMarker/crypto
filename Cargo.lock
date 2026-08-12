@@ -1826,6 +1826,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "ureq",
+ "zeroize",
 ]
 
 [[package]]
