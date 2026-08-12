@@ -42,6 +42,9 @@ primitive-types = { version = "0.12", default-features = false, features = ["std
 # Benchmarking (roadmap Phase 0 checklist item)
 criterion = "0.5"
 
+# Property-based testing (roadmap Phase 5 "audit")
+proptest = "1"
+
 # Zeroization for secret material (roadmap Phase 5 "secret handling")
 zeroize = "1"
 
