@@ -12,20 +12,28 @@
 //!   reorg handling
 //! - [`mempool`]: a UTXO-set-backed transaction pool that rejects double
 //!   spends and stays consistent with confirmed blocks
+//! - [`p2p`]: dependency-free TCP block sync — two nodes can sync a chain
+//!   and agree on the same canonical tip
+//! - [`evm`]: a minimal, teaching-grade EVM interpreter (stack machine,
+//!   memory, storage, jumps, calls, contract deployment)
 //!
 //! This is a *teaching* chain: the wire formats are intentionally minimal and
 //! documented, not byte-compatible with Bitcoin or Ethereum.
 
 pub mod block;
 pub mod chain;
+pub mod evm;
 pub mod mempool;
 pub mod merkle;
+pub mod p2p;
 pub mod pow;
 
 pub use block::{Block, BlockHeader, OutPoint, Transaction, TxIn, TxOut};
 pub use chain::{make_genesis, BlockChain, ChainError, SubmitOutcome};
+pub use evm::{execute, Account, CallContext, EvmError, ExecutionResult, ExitReason, WorldState};
 pub use mempool::{Mempool, MempoolError, UtxoSet};
 pub use merkle::{merkle_root, verify_proof, MerkleProof, ZERO_HASH};
+pub use p2p::{Node, P2pError, SyncReport, MAX_BLOCKS_PER_RESPONSE};
 pub use pow::{compute_target, header_hash, mine, DifficultyError, Target};
 
 /// Re-export of the double-SHA256 hash for convenience.

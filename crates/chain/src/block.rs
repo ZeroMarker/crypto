@@ -7,23 +7,24 @@
 
 use crate::merkle::merkle_root;
 use crypto_core::hash::hash256;
+use serde::{Deserialize, Serialize};
 
 /// A reference to a previously-created output: `(txid, output_index)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OutPoint {
     pub txid: [u8; 32],
     pub index: u32,
 }
 
 /// One unspent output created by a transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: u64,
     pub script_pubkey: [u8; 20],
 }
 
 /// A transaction input: an outpoint plus a signature placeholder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxIn {
     pub prev_out: OutPoint,
     /// 32 bytes of "signature" (kept opaque here; real systems use ECDSA).
@@ -32,7 +33,7 @@ pub struct TxIn {
 
 /// A coinbase transaction creates new money; `is_coinbase` is derived from
 /// having no inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transaction {
     pub inputs: Vec<TxIn>,
     pub outputs: Vec<TxOut>,
@@ -72,7 +73,7 @@ impl Transaction {
 
 /// A 80-byte header: previous hash, merkle root, time, compact bits
 /// (difficulty), and nonce. The work hash commits to all of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockHeader {
     pub prev_hash: [u8; 32],
     pub merkle_root: [u8; 32],
@@ -100,7 +101,7 @@ impl BlockHeader {
 
 /// A block: header plus its transactions. The header's merkle root must
 /// commit to `txs`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
     pub txs: Vec<Transaction>,
