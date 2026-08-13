@@ -11,7 +11,7 @@ Goal: get a clean Rust workspace you can build on. **Done** — see
 - [x] `cargo new` workspace layout (`crates/` for libs, `bin/` for executables)
 - [x] Pin Rust toolchain (`rust-toolchain.toml`)
 - [x] CI: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
-- [ ] Benchmarks harness (`criterion`) wired in
+- [x] Benchmarks harness (`criterion`) wired in
 
 Done when: `cargo test` and `cargo clippy -D warnings` pass cleanly on CI.
 
@@ -83,16 +83,28 @@ Goal: turn the plumbing into a useful application. **Implemented in
 Done when: a paper-trading bot runs a backtested strategy live against a sandbox exchange.
 
 ## Phase 5 — Production hardening
-Goal: ship something safe enough for real funds (or real money). **Planned** —
+Goal: ship something safe enough for real funds (or real money). **In progress** —
 see [docs/06-hardening.md](docs/06-hardening.md).
 
-- [ ] Secret handling: env/`secrets` mgmt, no keys in logs, hardware wallet or secure enclave option
-- [ ] Audit: dependency auditing (`cargo audit`), fuzzing (`cargo-fuzz`) on parsers
-- [ ] Observability: structured logs (`tracing`), metrics, alerting
-- [ ] Resilience: reconnect/backoff, circuit breakers, graceful shutdown
-- [ ] Failure drills: kill -9, network partition, clock skew, replay protection
+- [x] Secret handling baseline: zeroized buffers plus env/permission-checked
+      file loading, with redacted debug output
+- [ ] Secret handling production integrations: external secrets manager and
+      hardware wallet or secure enclave
+- [x] Audit baseline: RustSec `cargo audit` in CI, parser property tests and
+      deterministic fuzz-style tests
+- [ ] Audit policy: `cargo deny` and persistent `cargo-fuzz` targets
+- [x] Observability baseline: structured `tracing` logs and Prometheus-format
+      counters, gauges and histograms
+- [ ] Observability operations: scrape endpoint and alerting rules
+- [x] Resilience baseline: transient-error retries with jittered backoff,
+      circuit breaker, atomic persistence and graceful Ctrl-C shutdown
+- [ ] Resilience operations: SIGTERM handling and persistent reconnecting feeds
+- [x] Failure drills: interrupted-write safety and future clock-skew rejection
+- [ ] Failure drills: real network partitions, replay protection and idempotent
+      order/broadcast keys
 
-Done when: a test-run passes with injected faults and no funds/state corruption.
+Done when: a fault-injected test run completes with no funds/state corruption,
+operational alerts are wired, and dependency/policy audits pass.
 
 ---
 
@@ -120,6 +132,7 @@ Done when: a test-run passes with injected faults and no funds/state corruption.
 1. **M1 — Keys & wallet** (Phases 0–2): offline signer CLI + testnet broadcast. ✅ `crypto-core` + `wallet` done.
 2. **M2 — Chain understanding** (Phase 3): small POW chain + EVM exec. ✅ `chain` complete: merkle/SPV, PoW, validation, reorg, mempool, P2P sync, EVM interpreter.
 3. **M3 — Trading bot** (Phase 4): backtester + paper trader. ✅ `trading` crate: klines, OHLCV, indicators, backtest, paper broker, risk, `trade` CLI.
-4. **M4 — Hardened** (Phase 5): audits, fuzzing, fault drills. 🚧 next up.
+4. **M4 — Hardened** (Phase 5): audits, fuzzing, telemetry and fault drills.
+   🚧 baseline implemented; production integrations and drills remain.
 
 Start at M1. Everything before it is dependency; everything after is polish.

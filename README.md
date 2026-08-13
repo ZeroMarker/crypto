@@ -11,7 +11,7 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
 | 2 — Wallet | [`wallet`](crates/wallet) | ✅ implemented (keystore, tx signing, JSON-RPC) |
 | 3 — Node/ledger | [`chain`](crates/chain) | ✅ implemented (P2P sync + EVM) |
 | 4 — Trading app | [`trading`](crates/trading) | ✅ implemented (backtest + paper trader) |
-| 5 — Hardening | — | ⏳ planned |
+| 5 — Hardening | Cross-cutting | 🚧 in progress (secrets, audit, telemetry, resilience, fault tests) |
 
 ## What's implemented
 
@@ -34,6 +34,12 @@ software in Rust. Follows the [roadmap](ROADMAP.md).
   aggregation, SMA/EMA/RSI indicators, event-driven backtester (drawdown,
   Sharpe), paper broker (fees/slippage), risk controls, and a `trade` CLI
   (`fetch` / `backtest` / `live` paper trading)
+- **Hardening**: zeroized secret loading from environment or permission-checked
+  files, parser property/fuzz tests, structured logs, Prometheus-format metrics,
+  retry/backoff and circuit breakers, graceful Ctrl-C shutdown, atomic market
+  data writes, and future-timestamp rejection
+- **CI**: pinned Rust 1.96.0 with formatting, strict Clippy, workspace tests, and
+  RustSec dependency auditing on every push to `main` and every pull request
 
 All primitives validated against official test vectors (NIST, RFC 4231, BIP-39,
 BIP-32); the chain is validated against Bitcoin block 100000 and the genesis
@@ -49,6 +55,8 @@ cargo run -p wallet --example mnemonic_to_address
 cargo run -p wallet --example keystore
 cargo run -p wallet --example sign_transaction
 cargo run -p chain --example demo
+cargo run -p trading --bin trade -- fetch BTCUSDT 1h --limit 200 --out bars.json
+cargo run -p trading --bin trade -- backtest --data bars.json --fast 20 --slow 50
 ```
 
 ## Docs
