@@ -58,7 +58,7 @@ fn fuzz_validate_structure_never_panics() {
             _ => block.header.nonce = block.header.nonce.wrapping_add(rng.next()),
         }
         // Sometimes mutate a transaction's bytes.
-        if rng.next() % 3 == 0 {
+        if rng.next().is_multiple_of(3) {
             let mut tx_bytes = block.txs[0].serialize();
             rng.mutate(&mut tx_bytes);
             if let Some(t) = deserialize_tx(&tx_bytes) {
@@ -98,7 +98,10 @@ fn fuzz_mempool_submit_never_panics() {
         for i in 0..n_inputs {
             let mut txid = [0u8; 32];
             txid[0] = i as u8;
-            let op = chain::block::OutPoint { txid, index: rng.next() as u32 };
+            let op = chain::block::OutPoint {
+                txid,
+                index: rng.next() as u32,
+            };
             let value = rng.next() % 1_000_000;
             mp.utxo_mut().credit(op, value, false);
             inputs.push((op, value));

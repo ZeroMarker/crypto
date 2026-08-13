@@ -16,13 +16,28 @@
 //! `backtest --data` is fully offline and reproducible.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use trading::backtest::{run, BacktestConfig};
 use trading::broker::BrokerConfig;
-use trading::data::{load_bars, save_bars, DataClient};
+use trading::data::{load_bars, save_bars_atomic, DataClient};
 use trading::report::format_report;
 use trading::risk::RiskConfig;
 use trading::strategy::{SmaCrossover, Strategy};
+use trading::telemetry::{global, init_logging};
+
+/// Set by the Ctrl-C handler; the live loop checks it between polls and
+/// shuts down gracefully (flush + summary + metrics) instead of dying mid-
+/// write (roadmap Phase 5 "graceful shutdown").
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+fn install_shutdown_handler() {
+    let flag = Arc::new(&SHUTDOWN);
+    let _ = ctrlc::set_handler(move || {
+        flag.store(true, Ordering::SeqCst);
+    });
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -35,6 +50,8 @@ fn usage() -> ! {
 }
 
 fn main() {
+    init_logging();
+    install_shutdown_handler();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         usage();
@@ -89,8 +106,9 @@ fn cmd_fetch(args: &[String]) {
     match client.klines(&symbol, &interval, limit) {
         Ok(bars) => match &out {
             Some(path) => {
-                save_bars(path, &bars).expect("save bars");
+                save_bars_atomic(path, &bars).expect("save bars");
                 println!("saved {} bars to {}", bars.len(), path.display());
+                tracing::info!(symbol, interval, bars = bars.len(), "bars saved");
             }
             None => {
                 let first = bars.first().map(|b| b.open_time).unwrap_or(0);
@@ -154,7 +172,9 @@ fn cmd_backtest(args: &[String]) {
 }
 
 /// Poll the exchange, drive the SMA strategy on each newly completed bar and
-/// print the paper account state. Ctrl-C stops the loop.
+/// print the paper account state. Ctrl-C triggers a graceful shutdown: the
+/// loop finishes the current iteration, prints a summary and the Prometheus
+/// metrics snapshot, then exits 0 (roadmap Phase 5 "resilience").
 fn cmd_live(args: &[String]) {
     if args.len() < 2 {
         usage();
@@ -174,6 +194,9 @@ fn cmd_live(args: &[String]) {
     let mut last_time: i64 = 0;
     let limit: u32 = (slow + 100).max(200) as u32;
     let mut entry_price: Option<f64> = None;
+    let mut last_close: f64 = 0.0;
+    let metrics = global();
+    metrics.set_gauge("trading_starting_cash", cash);
 
     println!("paper trading {symbol} {interval} (sma {fast}/{slow}) — Ctrl-C to stop");
     loop {
@@ -191,9 +214,12 @@ fn cmd_live(args: &[String]) {
                     // Stop-loss at the bar open.
                     if let (Some(entry), true) = (entry_price, broker.position() > 0.0) {
                         if trading::risk::stop_hit(entry, bar.open, 0.10) {
-                            broker
+                            if broker
                                 .market_sell(usize::MAX, bar.open, broker.position())
-                                .ok();
+                                .is_ok()
+                            {
+                                metrics.inc("trading_stop_losses_total", 1);
+                            }
                             entry_price = None;
                             println!("  stop-loss hit at {:.2}", bar.open);
                         }
@@ -214,29 +240,60 @@ fn cmd_live(args: &[String]) {
                                 0.95,
                             );
                             if qty > 0.0 && broker.market_buy(idx, bar.close, qty).is_ok() {
+                                metrics.inc("trading_buys_total", 1);
                                 entry_price = Some(bar.close);
                                 println!("  BUY  {qty:.4} @ {:.2}", bar.close);
                             }
                         }
                         trading::strategy::Signal::Sell if broker.position() > 0.0 => {
                             let qty = broker.position();
-                            broker.market_sell(idx, bar.close, qty).ok();
+                            if broker.market_sell(idx, bar.close, qty).is_ok() {
+                                metrics.inc("trading_sells_total", 1);
+                            }
                             entry_price = None;
                             println!("  SELL {qty:.4} @ {:.2}", bar.close);
                         }
                         _ => {}
                     }
                 }
+                let last = bars.last();
+                last_close = last.map(|b| b.close).unwrap_or(last_close);
+                let equity = broker.equity(last_close);
+                metrics.set_gauge("trading_equity_usd", equity);
+                metrics.set_gauge("trading_position", broker.position());
                 println!(
                     "[{}] equity={:.2} cash={:.2} pos={:.4} realized={:.2}",
-                    format_time(bars.last().map(|b| b.open_time).unwrap_or(0)),
-                    broker.equity(bars.last().map(|b| b.close).unwrap_or(0.0)),
+                    format_time(last.map(|b| b.open_time).unwrap_or(0)),
+                    equity,
                     broker.cash(),
                     broker.position(),
                     broker.realized_pnl(),
                 );
+                tracing::info!(
+                    symbol,
+                    interval,
+                    equity = format!("{equity:.2}"),
+                    position = format!("{:.4}", broker.position()),
+                    "paper account updated"
+                );
             }
-            Err(e) => eprintln!("fetch failed: {e} — retrying in {poll_secs}s"),
+            Err(e) => {
+                tracing::warn!(symbol, error = %e, "klines fetch failed");
+                eprintln!("fetch failed: {e} — retrying in {poll_secs}s");
+            }
+        }
+        metrics.inc("trading_poll_cycles_total", 1);
+        if SHUTDOWN.load(Ordering::SeqCst) {
+            println!(
+                "\nshutting down: {:.2} cycles, equity={:.2} cash={:.2} pos={:.4} realized={:.2}",
+                metrics.counter("trading_poll_cycles_total"),
+                broker.equity(last_close),
+                broker.cash(),
+                broker.position(),
+                broker.realized_pnl(),
+            );
+            println!("\n\n--- metrics ---\n{}", metrics.render_prometheus());
+            std::process::exit(0);
         }
         std::thread::sleep(std::time::Duration::from_secs(poll_secs));
     }

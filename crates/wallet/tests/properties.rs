@@ -17,8 +17,8 @@ use wallet::tx::{FeeMarket, Transaction};
 /// RLP integers within u128; gas limit stays >= 21000.
 fn arb_tx() -> impl Strategy<Value = Transaction> {
     (
-        any::<u64>(),                              // chain_id (never 0)
-        any::<u64>(),                              // nonce
+        any::<u64>(), // chain_id (never 0)
+        any::<u64>(), // nonce
         prop_oneof![
             Just(FeeMarket::Legacy { gas_price: 1 }),
             Just(FeeMarket::Eip1559 {
@@ -30,17 +30,14 @@ fn arb_tx() -> impl Strategy<Value = Transaction> {
             3 => any::<[u8; 20]>().prop_map(Some),
             1 => Just(None),
         ],
-        0u128..1_000_000_000_000_000_000u128,      // value (1 ETH max)
+        0u128..1_000_000_000_000_000_000u128, // value (1 ETH max)
         prop::collection::vec(any::<u8>(), 0..64), // calldata
     )
-        .prop_map(
-            |(chain_id, nonce, fee, to, value, data)| {
-                let mut tx =
-                    Transaction::new(chain_id, fee, nonce, to, value, data).expect("valid tx");
-                tx.gas_limit = 21_000;
-                tx
-            },
-        )
+        .prop_map(|(chain_id, nonce, fee, to, value, data)| {
+            let mut tx = Transaction::new(chain_id, fee, nonce, to, value, data).expect("valid tx");
+            tx.gas_limit = 21_000;
+            tx
+        })
 }
 
 fn signing_key() -> SigningKey {

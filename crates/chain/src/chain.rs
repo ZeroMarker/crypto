@@ -35,6 +35,10 @@ pub enum ChainError {
     BadHeight(u64, u64),
     #[error("timestamp not strictly greater than parent: {0} <= {1}")]
     BadTimestamp(u32, u32),
+    /// Clock-skew drill: the block is stamped too far in the future
+    /// (`timestamp > now + tolerance`).
+    #[error("timestamp {0} is more than {1}s ahead of local time")]
+    FutureTimestamp(u32, u32),
 }
 
 /// An in-memory blockchain. Holds all seen blocks plus the active chain.
@@ -46,6 +50,9 @@ pub struct BlockChain {
     blocks: HashMap<[u8; 32], Block>,
     height: HashMap<[u8; 32], u64>,
     active_head: [u8; 32],
+    /// Maximum seconds a block may be stamped ahead of local time (clock-skew
+    /// protection). `None` disables the check.
+    max_future_skew: Option<u32>,
 }
 
 impl BlockChain {
@@ -65,7 +72,16 @@ impl BlockChain {
             blocks,
             height,
             active_head: genesis_hash,
+            max_future_skew: None,
         })
+    }
+
+    /// Enable clock-skew protection: reject blocks stamped more than `skew`
+    /// seconds ahead of local time (roadmap Phase 5 "clock skew" drill).
+    /// `None` (the default) accepts any future timestamp.
+    pub fn with_future_skew(mut self, skew: u32) -> BlockChain {
+        self.max_future_skew = Some(skew);
+        self
     }
 
     pub fn active_tip(&self) -> [u8; 32] {
@@ -88,6 +104,7 @@ impl BlockChain {
     pub fn submit(&mut self, block: Block) -> Result<SubmitOutcome, ChainError> {
         let hash = block.hash();
         if self.blocks.contains_key(&hash) {
+            tracing::debug!(block = ?hex::encode(hash), "duplicate block");
             return Ok(SubmitOutcome::Duplicate);
         }
 
@@ -102,10 +119,35 @@ impl BlockChain {
 
         let parent = &self.blocks[&prev];
         if block.header.timestamp <= parent.header.timestamp {
+            tracing::warn!(
+                block = ?hex::encode(hash),
+                ts = block.header.timestamp,
+                parent_ts = parent.header.timestamp,
+                "rejected: timestamp not newer than parent (clock skew or reorg)"
+            );
             return Err(ChainError::BadTimestamp(
                 block.header.timestamp,
                 parent.header.timestamp,
             ));
+        }
+
+        // Clock-skew protection: reject blocks stamped unreasonably far in
+        // the future. A broken or malicious peer's clock drift must not push
+        // our tip forward.
+        if let Some(skew) = self.max_future_skew {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as u32)
+                .unwrap_or(0);
+            if block.header.timestamp > now.saturating_add(skew) {
+                tracing::warn!(
+                    block = ?hex::encode(hash),
+                    ts = block.header.timestamp,
+                    now, skew,
+                    "rejected: timestamp too far in the future (clock skew)"
+                );
+                return Err(ChainError::FutureTimestamp(block.header.timestamp, skew));
+            }
         }
 
         let height = prev_height + 1;
@@ -115,8 +157,10 @@ impl BlockChain {
         let old_active_height = self.active_height();
         if height > old_active_height {
             self.active_head = hash;
+            tracing::info!(height, block = ?hex::encode(hash), "accepted: new active tip");
             return Ok(SubmitOutcome::Accepted { new_height: height });
         }
+        tracing::debug!(height, "accepted: side branch (orphan)");
         Ok(SubmitOutcome::Orphan { height })
     }
 

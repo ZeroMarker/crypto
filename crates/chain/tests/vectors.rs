@@ -131,6 +131,134 @@ fn mining_finds_nonce() {
 }
 
 #[test]
+fn p2p_network_partition_then_recovery() {
+    // Roadmap Phase 5 "network partition" drill: A and B sync; a partition
+    // lets both sides mine divergent blocks; on reconnect B must re-download
+    // A's chain (reorg from height 1) and converge on A's tip.
+    let bits = 0x207fffff;
+    let target = compute_target(bits).unwrap();
+
+    let make_coinbase = |n: u64| Transaction {
+        inputs: vec![],
+        outputs: vec![TxOut {
+            value: 50_0000_0000,
+            script_pubkey: [n as u8; 20],
+        }],
+    };
+    let mine_on = |parent: &Block, ts: u32, tx: Transaction| -> Block {
+        let mut header = BlockHeader {
+            prev_hash: parent.hash(),
+            merkle_root: merkle_root(&[tx.txid()]),
+            timestamp: ts,
+            bits,
+            nonce: 0,
+        };
+        let (found, _) = mine(&mut header, &target, 1_000_000);
+        assert!(found);
+        Block {
+            header,
+            txs: vec![tx],
+        }
+    };
+
+    // Two nodes on the same genesis.
+    let genesis = make_genesis([0xab; 20], bits);
+    let node_a =
+        chain::p2p::Node::start(BlockChain::new(genesis.clone()).unwrap(), "127.0.0.1:0").unwrap();
+    let node_b = chain::p2p::Node::start(BlockChain::new(genesis).unwrap(), "127.0.0.1:0").unwrap();
+
+    // Initial sync: both at height 0, same tip.
+    assert_eq!(node_a.height(), 0);
+    assert!(node_b.connect(node_a.addr()).unwrap().converged);
+
+    // --- Partition ---
+    // A mines blocks 1..3; B (isolated) mines its own divergent block 1.
+    let mut prev = node_a.chain().active_chain(0)[0].clone();
+    for i in 1..=3u64 {
+        let ts = 1_234_567_890 + i as u32;
+        let block = mine_on(&prev, ts, make_coinbase(i));
+        node_a.submit(block.clone()).unwrap();
+        prev = block;
+    }
+    let b_genesis = node_b.chain().active_chain(0)[0].clone();
+    let b_divergent = mine_on(&b_genesis, 1_234_567_891, make_coinbase(99));
+    node_b.submit(b_divergent.clone()).unwrap();
+    assert_eq!(node_a.height(), 3);
+    assert_eq!(node_b.height(), 1);
+    assert_ne!(node_a.tip(), node_b.tip(), "partition: tips diverge");
+
+    // --- Reconnect ---
+    // B pulls A's chain: its own block 1 becomes a side branch, A's chain
+    // wins (longest valid), and B converges on A's tip.
+    let report = node_b.connect(node_a.addr()).unwrap();
+    assert!(report.reorg, "divergent branch forces a full re-download");
+    assert!(report.converged, "B must converge on A's tip");
+    assert_eq!(node_b.height(), 3);
+    assert_eq!(
+        node_b.tip(),
+        node_a.tip(),
+        "partition healed: same canonical tip"
+    );
+}
+
+#[test]
+fn chain_rejects_clock_skew_future_blocks() {
+    // Roadmap Phase 5 "clock skew" drill: with a 60s tolerance, blocks
+    // stamped more than 60s ahead of local time are rejected; blocks within
+    // the window are accepted.
+    let bits = 0x207fffff;
+    let genesis = make_genesis([0xab; 20], bits);
+    let mut chain = BlockChain::new(genesis.clone())
+        .unwrap()
+        .with_future_skew(60);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+
+    let mine_block = |timestamp: u32| -> Block {
+        let tx = Transaction {
+            inputs: vec![],
+            outputs: vec![TxOut {
+                value: 1,
+                script_pubkey: [0xee; 20],
+            }],
+        };
+        let target = compute_target(bits).unwrap();
+        let mut header = BlockHeader {
+            prev_hash: genesis.hash(),
+            merkle_root: chain::merkle::merkle_root(&[tx.txid()]),
+            timestamp,
+            bits,
+            nonce: 0,
+        };
+        let (mined, _) = mine(&mut header, &target, 1_000_000);
+        assert!(mined);
+        Block {
+            header,
+            txs: vec![tx],
+        }
+    };
+
+    // 30s ahead: within the 60s tolerance => accepted.
+    let ok = mine_block(now + 30);
+    assert_eq!(
+        chain.submit(ok).unwrap(),
+        chain::SubmitOutcome::Accepted { new_height: 1 }
+    );
+
+    // 120s ahead: beyond tolerance => rejected with FutureTimestamp.
+    let future = mine_block(now + 120);
+    assert!(matches!(
+        chain.submit(future),
+        Err(chain::ChainError::FutureTimestamp(ts, skew)) if skew == 60 && ts >= now + 120
+    ));
+    // The tip did not move.
+    assert_eq!(chain.active_height(), 1);
+}
+
+#[test]
 fn chain_builds_and_validates() {
     let bits = 0x207fffff;
     let genesis = make_genesis([0xab; 20], bits);

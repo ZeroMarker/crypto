@@ -45,12 +45,18 @@ pub mod broker;
 pub mod data;
 pub mod indicator;
 pub mod report;
+pub mod resilience;
 pub mod risk;
 pub mod strategy;
+pub mod telemetry;
 
 pub use backtest::{run, BacktestConfig, BacktestReport};
 pub use bar::{aggregate_trades, resample, Bar, Trade};
 pub use broker::{Broker, BrokerConfig, BrokerError, Fill, Side};
 pub use indicator::{ema, rsi, sma};
+pub use resilience::{
+    retry_with_backoff, Backoff, BreakerState, CircuitBreaker, CircuitBreakerResult, CircuitOpen,
+};
 pub use risk::{max_position_units, stop_hit, RiskConfig};
 pub use strategy::{BuyAndHold, Signal, SmaCrossover, Strategy, StrategyContext};
+pub use telemetry::{global, init_logging, Metrics};

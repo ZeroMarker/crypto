@@ -236,12 +236,19 @@ fn handshake(chain: &Arc<Mutex<BlockChain>>, stream: &mut TcpStream) -> Result<P
             cur = block.header.prev_hash;
         }
     };
+    // Take one lock and read both fields. Locking twice in the same
+    // statement would self-deadlock: the first temporary MutexGuard lives
+    // until the statement ends, and std::sync::Mutex is not reentrant.
+    let (best_height, best_hash) = {
+        let chain = chain.lock().unwrap();
+        (chain.active_height(), chain.active_tip())
+    };
     write_message(
         stream,
         &Message::Hello {
             genesis,
-            best_height: chain.lock().unwrap().active_height(),
-            best_hash: chain.lock().unwrap().active_tip(),
+            best_height,
+            best_hash,
         },
     )?;
     match read_message(stream)? {

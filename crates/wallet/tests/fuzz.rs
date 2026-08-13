@@ -110,11 +110,11 @@ fn fuzz_keystore_from_json_never_panics() {
             rng.mutate(&mut buf);
         }
         // Occasionally truncate in the middle of a hex string / number.
-        if rng.next() % 3 == 0 {
+        if rng.next().is_multiple_of(3) {
             buf.truncate(rng.pick(buf.len() + 1));
         }
         // Keep the seed fresh: every 256 iterations re-randomize a chunk.
-        if rng.next() % 256 == 0 {
+        if rng.next().is_multiple_of(256) {
             bytes = buf.clone();
         }
         let s = String::from_utf8_lossy(&buf);

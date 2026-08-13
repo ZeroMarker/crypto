@@ -108,8 +108,8 @@ pub fn load_signing_key() -> Result<SigningKey, SecretError> {
     let mut key_bytes = [0u8; 32];
     key_bytes.copy_from_slice(secret.as_bytes());
     drop(secret); // zeroized here
-    let sk = SigningKey::from_slice(&key_bytes)
-        .map_err(|e| SecretError::InvalidKey(e.to_string()))?;
+    let sk =
+        SigningKey::from_slice(&key_bytes).map_err(|e| SecretError::InvalidKey(e.to_string()))?;
     key_bytes.zeroize();
     Ok(sk)
 }
@@ -244,10 +244,7 @@ mod tests {
 
     #[test]
     fn missing_key_file_errors() {
-        let _g = secret_env(
-            "WALLET_KEY_FILE",
-            "/nonexistent/definitely-missing-key.hex",
-        );
+        let _g = secret_env("WALLET_KEY_FILE", "/nonexistent/definitely-missing-key.hex");
         assert!(matches!(
             load_signing_key(),
             Err(SecretError::KeyFile(_, _))

@@ -74,11 +74,5 @@ fn bench_ecdsa(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_hashes,
-    bench_aead,
-    bench_kdf,
-    bench_ecdsa
-);
+criterion_group!(benches, bench_hashes, bench_aead, bench_kdf, bench_ecdsa);
 criterion_main!(benches);
