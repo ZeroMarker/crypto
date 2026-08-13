@@ -1,2 +1,2 @@
-[rust]
+[toolchain]
 channel = "1.96.0"
